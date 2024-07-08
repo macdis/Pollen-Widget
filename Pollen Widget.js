@@ -3,22 +3,21 @@
 // icon-color: deep-green; icon-glyph: spa;
 "use strict";
 /*
-*******************************************************************************
+****************************************************************
 Pollen Widget
-*******************************************************************************
+****************************************************************
 This is a widget for use with the Scriptable app under iOS.
-*******************************************************************************
+****************************************************************
 See https://github.com/macdis/Pollen-Widget
-*******************************************************************************
+****************************************************************
 You must have a Google API key for this widget to work.
 Google APIs required: Pollen API, Geocoding API.
 See the README.md file for more information.
-*******************************************************************************
+****************************************************************
 Copyright (c) 2024 Iain Macdonald. Licensed under the terms of the MIT License.
-*******************************************************************************
-
+****************************************************************
 Please note:
-Your Google API key can either be defined in this file (let apiKey =...) or it
+Your Google API key can either be defined in this file (let apiKey = "...") or it
 can be stored in a 'Pollen Widget.json' file saved in the same directory as the widget script.
 If both are defined, then the value in 'Pollen Widget.json' is used.
 Example of 'Pollen Widget.json':
@@ -68,12 +67,12 @@ let corrections = {
   Montreal: "Montréal",
 };
 
-///////////////////////////////////////////////////////////////
-// OK so nothing *really* has to be changed below this point //
-///////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+// OK so nothing *really* has to be changed below this point  //
+////////////////////////////////////////////////////////////////
 
 // Basics
-const timeFrame = updateInterval * 3600000; // Convert hours to milliseconds
+const timeFrame = updateInterval * 3600; // Convert hours to seconds
 const bgColorGradient = new LinearGradient();
 bgColorGradient.colors = [
   new Color(widgetColors.bg0),
@@ -81,11 +80,24 @@ bgColorGradient.colors = [
 ];
 bgColorGradient.locations = [0, 0.75];
 const now = new Date();
+const nowLocal = +(+now).toString().slice(0, -3); // Epoch in seconds (strip milliseconds)
 
 // Initialize local file manager and cache
 const fm = FileManager.local();
 const path = fm.joinPath(fm.documentsDirectory(), "macdis-pollen-widget-data");
 if (!fm.fileExists(path)) fm.createDirectory(path, false);
+
+// Remove all cached data outside of timeFrame
+if (fm.isDirectory(path) && fm.listContents(path).length > 0) {
+  fm.listContents(path).forEach((file) => {
+    const thisFileTimeStamp = +(+fm.modificationDate(fm.joinPath(path, file)))
+      .toString()
+      .slice(0, -3); //Epoch in seconds (strip milliseconds)
+    if (nowLocal - thisFileTimeStamp > timeFrame) {
+      fm.remove(fm.joinPath(path, file));
+    }
+  });
+}
 
 //Initialize iCloud file manager
 const fmCloud = FileManager.iCloud();
@@ -168,9 +180,6 @@ if (!months.includes(month)) {
   return; // Exits the script
 }
 
-// Tidy up cached data: deletes all cached data not from today
-tidyData();
-
 // Get the parameter from the home screen widget options
 // or set it to 'here' (geolocation) if there isn't one.
 if (
@@ -204,38 +213,79 @@ const activeFile = fm.joinPath(
   `/pollen-${searchTerm.replace(/\s/g, "-")}.json`
 );
 
-// Load the cached data if it exists and is recent, otherwise load new data
-if (
-  fm.fileExists(activeFile) &&
-  now - fm.modificationDate(activeFile) <= timeFrame
-) {
-  // Use existing data
-  console.log("Using existing JSON data.");
-  var data = await JSON.parse(fm.readString(activeFile));
-} else if (
-  fm.fileExists(activeFile) &&
-  now - fm.modificationDate(activeFile) > timeFrame
-) {
-  console.log("Cached data outside of update interval. Verifying UTC date...");
-  var cachedData = await JSON.parse(fm.readString(activeFile));
-  if (
-    cachedData.dailyInfo[0].date.day === now.getDate() &&
-    cachedData.dailyInfo[0].date.day !== now.getUTCDate()
-  ) {
-    // Then UTC day has changed
-    console.log(
-      "Will keep data for now to avoid displaying the new UTC date of new data prematurely."
-    );
-    var data = cachedData;
-    fm.writeString(activeFile, JSON.stringify(data)); // To update the file modification time
-  } else {
-    console.log("Fetching new JSON data.");
-    var data = await getJsonData();
-  }
-} else {
-  // Fetch new data
-  console.log("Fetching new JSON data.");
+// Fetch data if there is no cached data
+if (!fm.fileExists(activeFile)) {
+  console.log("No cached data. Fetching.");
   var data = await getJsonData();
+}
+const cachedData = await JSON.parse(fm.readString(activeFile));
+
+// Initialize date formatter
+const df = new DateFormatter();
+df.dateFormat = "yyyyMMdd";
+// Get the dates we need as numbers
+const nowLocalDate = +df.string(now); //yyyyMMdd
+const fileTimeStamp = +(+fm.modificationDate(activeFile))
+  .toString()
+  .slice(0, -3); //Epoch in seconds (strip milliseconds)
+const inFileDate =
+  +`${cachedData.dailyInfo[0].date.year}${cachedData.dailyInfo[0].date.month.toString().padStart(2, "0")}${cachedData.dailyInfo[0].date.day.toString().padStart(2, "0")}`; //yyyyMMdd
+
+// Some debugging info, if needed
+// console.log(`nowLocalDate = ${nowLocalDate}`);
+// console.log(`inFileDate = ${inFileDate}`);
+// console.log(`nowLocal = ${nowLocal}`);
+// console.log(`fileTimeStamp = ${fileTimeStamp}`);
+
+// Is the local date the same as the UTC date?
+// dateDiff = nowLocalDate - inFileDate;
+//          = 20240614 - 20240614 = 0 means today and the data's today match, so just update normally
+//          = 20240613 - 20240614 = -1 means you're in an UTC- timezone when it's midnight (or later) UTC, so keep the cached data until the dates match again
+//          = 20240615 - 20240614 = +1 means you're in a UTC+ timezone when midnight arrives, so shift the data while waiting for the dates to match again
+//          = something other than 0, -1, or 1 means Something's off, so reset
+const dateDiff = nowLocalDate - inFileDate;
+console.log(`Date difference = ${dateDiff}`);
+console.log(`Data age = ${nowLocal - fileTimeStamp}/${timeFrame} seconds`);
+
+switch (dateDiff) {
+  case 0:
+    if (nowLocal - fileTimeStamp > timeFrame) {
+      console.log("Cached data expired. Fetching new JSON data.");
+      var data = await getJsonData();
+    } else {
+      console.log("Using cached data.");
+      var data = cachedData;
+    }
+    break;
+  case -1:
+    if (nowLocal - fileTimeStamp > timeFrame) {
+      console.log(
+        "Cached data expired and you seem to be UTC-n. Retaining the expired data for now."
+      );
+      var data = cachedData;
+    } else {
+      console.log("Using cached data.");
+      var data = cachedData;
+    }
+    break;
+  case 1:
+    if (nowLocal - fileTimeStamp > timeFrame) {
+      console.log(
+        "Cached data expired and you seem to be UTC+n. Renewing and shifting the data."
+      );
+      var data = await getJsonData();
+      data.dailyInfo.shift();
+    } else {
+      console.log("Using shifted cached data.");
+      var data = cachedData;
+      data.dailyInfo.shift();
+    }
+    break;
+  default:
+    console.log(
+      "Your timezone may have changed drastically or something else is way off. Renewing the cached data."
+    );
+    var data = await getJsonData();
 }
 
 // Set some variables
@@ -332,7 +382,7 @@ stackPlace.addSpacer();
 // Push the previous stack up a bit
 const stackPushPreviousUp = stackContainer.addStack();
 stackPushPreviousUp.layoutVertically();
-stackPushPreviousUp.addSpacer(6);
+stackPushPreviousUp.addSpacer(2);
 
 //////////////////
 // Start of table
@@ -474,13 +524,13 @@ data.dailyInfo[0].pollenTypeInfo.forEach((pollenType, i) => {
 // So given { G: 2, T: 3 }, then the highest possible total would be UPI=5 for G and UPI=5 for T, or 10 in all.
 // The resulting percentage would be (2+3)/10 = 50%
 // But you could also use the highest single value:
-///////////////////////////////////////////////////////////////
+//
 // let numerator = Math.max(...Object.values(dataLS));
 // if (isNaN(numerator) || !isFinite(numerator)) numerator = 0;
 // const denominator = 5;
 ///////////////////////////////////////////////////////////////
 // Or you could choose one pollen type, e.g.,:
-///////////////////////////////////////////////////////////////
+//
 // let numerator = dataLS.T;
 // if (isNaN(numerator)) numerator = 0;
 // const denominator = 5;
@@ -677,19 +727,4 @@ async function progressCircle(
   stack.setPadding(padding, padding, padding, padding);
 
   return stack;
-}
-
-function tidyData() {
-  // Remove cached data not from today
-  let today = new Date(now).setHours(0, 0, 0, 0);
-  if (fm.isDirectory(path) && fm.listContents(path).length > 0) {
-    fm.listContents(path).forEach((file) => {
-      if (
-        fm.modificationDate(fm.joinPath(path, file)).setHours(0, 0, 0, 0) !==
-        today
-      ) {
-        fm.remove(fm.joinPath(path, file));
-      }
-    });
-  }
 }
