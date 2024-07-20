@@ -19,7 +19,7 @@ Copyright (c) 2024 Iain Macdonald. Licensed under the terms of the MIT License.
 Please note:
 Your Google API key can either be defined in this file (let apiKey = "...") or it
 can be stored in a 'Pollen Widget.json' file saved in the same directory as the widget script.
-If both are defined, then the value in 'Pollen Widget.json' is used.
+If both are defined, then the value in 'Pollen Widget.json' is preferred.
 Example of 'Pollen Widget.json':
 {
   "apiKey": "yourGoogleApiKey"
@@ -87,13 +87,13 @@ const fm = FileManager.local();
 const path = fm.joinPath(fm.documentsDirectory(), "macdis-pollen-widget-data");
 if (!fm.fileExists(path)) fm.createDirectory(path, false);
 
-// Remove all cached data outside of timeFrame
+// Remove all cached data outside of timeFrame + 86400 seconds (24 hours)
 if (fm.isDirectory(path) && fm.listContents(path).length > 0) {
   fm.listContents(path).forEach((file) => {
     const thisFileTimeStamp = +(+fm.modificationDate(fm.joinPath(path, file)))
       .toString()
       .slice(0, -3); //Epoch in seconds (strip milliseconds)
-    if (nowLocal - thisFileTimeStamp > timeFrame) {
+    if (nowLocal - thisFileTimeStamp > timeFrame + 86400) {
       fm.remove(fm.joinPath(path, file));
     }
   });
@@ -213,7 +213,7 @@ const activeFile = fm.joinPath(
   `/pollen-${searchTerm.replace(/\s/g, "-")}.json`
 );
 
-// Fetch data if there is no cached data
+// Fetch data only if there is no cached data
 if (!fm.fileExists(activeFile)) {
   console.log("No cached data. Fetching.");
   var data = await getJsonData();
@@ -225,58 +225,61 @@ const df = new DateFormatter();
 df.dateFormat = "yyyyMMdd";
 // Get the dates we need as numbers
 const nowLocalDate = +df.string(now); //yyyyMMdd
+const nowUTCDate =
+  +`${now.getUTCFullYear().toString()}${(now.getUTCMonth() + 1).toString().padStart(2, "0")}${now.getUTCDate().toString().padStart(2, "0")}`; //yyyyMMdd
 const fileTimeStamp = +(+fm.modificationDate(activeFile))
   .toString()
   .slice(0, -3); //Epoch in seconds (strip milliseconds)
 const inFileDate =
   +`${cachedData.dailyInfo[0].date.year}${cachedData.dailyInfo[0].date.month.toString().padStart(2, "0")}${cachedData.dailyInfo[0].date.day.toString().padStart(2, "0")}`; //yyyyMMdd
+const dateDiff = nowLocalDate - nowUTCDate;
 
 // Some debugging info, if needed
 // console.log(`nowLocalDate = ${nowLocalDate}`);
-// console.log(`inFileDate = ${inFileDate}`);
+// console.log(`nowUTCDate = ${nowUTCDate}`);
 // console.log(`nowLocal = ${nowLocal}`);
+// console.log(`inFileDate = ${inFileDate}`);
 // console.log(`fileTimeStamp = ${fileTimeStamp}`);
+// console.log(`Date difference = ${dateDiff}`);
+console.log(`Data age = ${nowLocal - fileTimeStamp}/${timeFrame} seconds`);
 
 // Is the local date the same as the UTC date?
-// dateDiff = nowLocalDate - inFileDate;
+// dateDiff = nowLocalDate - nowUTCDate;
 //          = 20240614 - 20240614 = 0 means today and the data's today match, so just update normally
 //          = 20240613 - 20240614 = -1 means you're in an UTC- timezone when it's midnight (or later) UTC, so keep the cached data until the dates match again
 //          = 20240615 - 20240614 = +1 means you're in a UTC+ timezone when midnight arrives, so shift the data while waiting for the dates to match again
 //          = something other than 0, -1, or 1 means Something's off, so reset
-const dateDiff = nowLocalDate - inFileDate;
-console.log(`Date difference = ${dateDiff}`);
-console.log(`Data age = ${nowLocal - fileTimeStamp}/${timeFrame} seconds`);
 
 switch (dateDiff) {
   case 0:
     if (nowLocal - fileTimeStamp > timeFrame) {
-      console.log("Cached data expired. Fetching new JSON data.");
+      console.log("Cached data expired, fetching new data. [0]");
       var data = await getJsonData();
     } else {
-      console.log("Using cached data.");
+      console.log("Using cached data. [0]");
       var data = cachedData;
     }
     break;
   case -1:
     if (nowLocal - fileTimeStamp > timeFrame) {
       console.log(
-        "Cached data expired and you seem to be UTC-n. Retaining the expired data for now."
+        "Cached data expired, but you're in UTC-x and the UTC date has changed. Re-using cached data for now. [-1]"
       );
       var data = cachedData;
     } else {
-      console.log("Using cached data.");
+      console.log("Using cached data. [-1]");
       var data = cachedData;
     }
     break;
   case 1:
     if (nowLocal - fileTimeStamp > timeFrame) {
       console.log(
-        "Cached data expired and you seem to be UTC+n. Renewing and shifting the data."
+        "Cached data expired and you're in UTC+x and the UTC date is behind your date. Retrieving and shifting the data. [+1]"
       );
       var data = await getJsonData();
       data.dailyInfo.shift();
     } else {
-      console.log("Using shifted cached data.");
+      console.log("Using shifted cached data. [+1]");
       var data = cachedData;
       data.dailyInfo.shift();
     }
@@ -615,13 +618,13 @@ async function getJsonData() {
     `https://pollen.googleapis.com/v1/forecast:lookup?location.latitude=${lat}&location.longitude=${lon}&days=${days}&key=${apiKey}&languageCode=${languageCode}&plantsDescription=0`
   );
   const allData = await request.loadJSON();
-  if (!allData.hasOwnProperty("dailyInfo")) {
-    throw new Error("Problem with download or API key not valid!");
-  } else {
+  if (allData.hasOwnProperty("dailyInfo")) {
     allData.placeName = placeNameLong; // Add place name to JSON for convenience
     allData.location = { latitude: lat, longitude: lon };
     fm.writeString(activeFile, JSON.stringify(allData));
     return allData;
+  } else {
+    throw new Error("Problem with download or API key not valid!");
   }
 }
 
