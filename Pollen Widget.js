@@ -302,7 +302,11 @@ const dayZero = new Date(
   0
 );
 const countryCode = data.regionCode;
-let place = data.placeName;
+if (data.placeName == null) {
+  var place = "?";
+} else {
+  var place = data.placeName;
+}
 if (corrections.hasOwnProperty(place)) place = corrections[place];
 
 // Declare headers and rows arrays
@@ -359,20 +363,10 @@ stackPlace.layoutHorizontally();
 stackPlace.addSpacer();
 stackPlace.centerAlignContent();
 stackPlace.backgroundColor = Color.clear();
-if (searchTerm === "here" || searchTerm === "saved") {
-  let stackPlaceImage = stackPlace.addImage(sf.image);
-  stackPlaceImage.imageSize = new Size(colWidths[0] - 2, colWidths[0] - 2);
-  stackPlaceImage.tintColor = new Color(widgetColors.defaultText);
-  stackPlaceImage.centerAlignImage();
-  if (place.length > 10) {
-    place = place.substring(0, 10) + "\u2026";
-  }
-  var placeText = stackPlace.addText("\u00a0" + place);
-  placeText.font = placeFont;
-} else if (place.length > 12) {
-  var placeText = stackPlace.addText(place.substring(0, 12) + "\u2026");
+if (place.length > 9) {
+  var placeText = stackPlace.addText(place.substring(0, 9) + "\u2026" + "\u00a0");
 } else {
-  var placeText = stackPlace.addText(place);
+  var placeText = stackPlace.addText(place + "\u00a0") ;
 }
 placeText.centerAlignText();
 placeText.font = placeFont;
@@ -380,6 +374,12 @@ placeText.textColor = new Color(widgetColors.defaultText);
 placeText.shadowColor = Color.black();
 placeText.shadowOffset = new Point(1, 1);
 placeText.shadowRadius = 1;
+if (searchTerm === "here" || searchTerm === "saved") {
+  let stackPlaceImage = stackPlace.addImage(sf.image);
+  stackPlaceImage.imageSize = new Size(colWidths[0] - 2, colWidths[0] - 2);
+  stackPlaceImage.tintColor = new Color(widgetColors.defaultText);
+  stackPlaceImage.centerAlignImage();
+} 
 stackPlace.addSpacer();
 
 // Push the previous stack up a bit
